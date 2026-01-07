@@ -200,6 +200,7 @@ class SECFilingScraper:
         logger.info(f"Enriched {len(enriched_filings)} filings")
         return enriched_filings
     
+
     def phase_c_download(self, filings: List[Dict]) -> List[Dict]:
         logger.info("PHASE C: DOWNLOAD")
         downloaded_filings = []
@@ -212,130 +213,198 @@ class SECFilingScraper:
             logger.info(f"Downloading {idx}/{len(filings)}: {ticker} - {accession_number}")
             
             acc_no_clean = accession_number.replace('-', '')
-            index_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{accession_number}-index.htm"            
-            response = self._make_request(index_url)
-            if not response:
-                # Try alternative index
-                index_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{accession_number}-index.htm"
-                response = self._make_request(index_url)
+            
+            # APPROACH 1: Try to get the complete submission text file first
+            # This contains all documents in a parseable format with <DOCUMENT> tags
+            txt_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{accession_number}.txt"
+            logger.info(f"  Trying complete submission text file: {txt_url}")
+            
+            response = self._make_request(txt_url)
+            
+            if response and len(response.text) > 10000:
+                content = response.text
                 
+                # Parse the document tags to find the main 10-K document
+                doc_start = re.compile(r"<DOCUMENT>")
+                doc_end = re.compile(r"</DOCUMENT>")
+                doc_type = re.compile(r"<TYPE>([^\n]+)")
+                
+                # Find all document sections
+                doc_starts = [m.end() for m in doc_start.finditer(content)]
+                doc_ends = [m.start() for m in doc_end.finditer(content)]
+                doc_types = [m.group(1).strip() for m in doc_type.finditer(content)]
+                
+                # Look for the main 10-K document (not exhibits)
+                main_doc_content = None
+                main_doc_type = None
+                
+                for start, end, dtype in zip(doc_starts, doc_ends, doc_types):
+                    # We want 10-K, not EX-* (exhibits)
+                    if '10-K' in dtype and not dtype.startswith('EX-'):
+                        main_doc_content = content[start:end]
+                        main_doc_type = dtype
+                        logger.info(f"  Found main document: {dtype}")
+                        break
+                
+                if main_doc_content:
+                    # Save the extracted document
+                    ticker_dir = self.output_dir / ticker
+                    ticker_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    filename = f"{ticker}_{accession_number.replace('-', '_')}_10k.txt"
+                    filepath = ticker_dir / filename
+                    
+                    with open(filepath, 'w', encoding='utf-8', errors='ignore') as f:
+                        f.write(main_doc_content)
+                    
+                    filing['download_path'] = str(filepath)
+                    filing['file_size'] = len(main_doc_content)
+                    filing['download_url'] = txt_url
+                    filing['downloaded_at'] = datetime.now().isoformat()
+                    filing['document_type'] = main_doc_type
+                    
+                    downloaded_filings.append(filing)
+                    logger.info(f"  Saved: {filepath} ({len(main_doc_content):,} bytes)")
+                    continue
+            
+            # APPROACH 2: If text file approach fails, try the HTML/iXBRL approach
+            logger.info(f"  Text file approach failed, trying HTML index...")
+            
+            index_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{accession_number}-index.htm"
+            response = self._make_request(index_url)
+            
             if not response:
                 logger.warning(f"Failed to fetch index for {accession_number}")
                 continue
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            doc_10k_url = None
             
-            # Look through all document links in the table
-            tables = soup.find_all('table')
-            candidates = []
+            # Find the primary document from the index
+            doc_url = None
+            primary_doc_name = None
+            
+            # Look for "Document Format Files" table
+            tables = soup.find_all('table', {'summary': 'Document Format Files'})
+            if not tables:
+                tables = soup.find_all('table')
             
             for table in tables:
                 rows = table.find_all('tr')
                 for row in rows:
                     cells = row.find_all('td')
-                    if len(cells) >= 3:
-                        # Typically: [Seq, Description, Document, Type, Size]
+                    if len(cells) >= 4:
+                        # Table: [Seq, Description, Document, Type, Size]
                         link_cell = cells[2] if len(cells) > 2 else None
+                        type_cell = cells[3].get_text().strip().upper() if len(cells) > 3 else ''
+                        
                         if link_cell:
                             link = link_cell.find('a', href=True)
                             if link:
                                 href = link['href']
-                                row_text = row.get_text().lower()
                                 
-                                # We want the main 10-K document
-                                # Skip exhibits (EX-), and look for .htm files
-                                if (('.htm' in href.lower() or '.html' in href.lower()) and
-                                    'ex-' not in href.lower() and 
-                                    'ex ' not in row_text and
-                                    'exhibit' not in row_text):
+                                # Find primary 10-K document
+                                is_html = href.lower().endswith(('.htm', '.html'))
+                                is_primary = type_cell == '10-K' or type_cell == '10-K/A'
+                                is_not_exhibit = not type_cell.startswith('EX-')
+                                
+                                if is_html and is_primary and is_not_exhibit:
+                                    primary_doc_name = href.split('/')[-1]
                                     
-                                    # Check if this looks like a main filing document
-                                    # Main documents usually have patterns like: companyname_10k.htm, d123456d10k.htm, etc.
-                                    if '10k' in href.lower() or '10-k' in row_text:
-                                        candidates.append({
-                                            'url': href,
-                                            'text': row_text,
-                                            'priority': 2  # Explicit 10-K mention
-                                        })
-                                    elif not href.endswith('-index.htm'):
-                                        candidates.append({
-                                            'url': href,
-                                            'text': row_text,
-                                            'priority': 1  # Generic HTML
-                                        })
+                                    # Try direct URL first
+                                    if href.startswith('http'):
+                                        doc_url = href
+                                    elif href.startswith('/'):
+                                        doc_url = f"https://www.sec.gov{href}"
+                                    else:
+                                        doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{primary_doc_name}"
+                                    
+                                    logger.info(f"  Found primary document: {primary_doc_name}")
+                                    break
+                    
+                    if doc_url:
+                        break
             
-            # Sort candidates by priority and pick the best one
-            if candidates:
-                candidates.sort(key=lambda x: x['priority'], reverse=True)
-                best_candidate = candidates[0]
-                href = best_candidate['url']
-                
-                # Construct full URL
-                if href.startswith('http'):
-                    doc_10k_url = href
-                elif href.startswith('/'):
-                    doc_10k_url = f"https://www.sec.gov{href}"
-                else:
-                    doc_10k_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{href}"
-                
-                logger.info(f"  Selected document: {href}")
-            
-            if not doc_10k_url:
-                logger.warning(f"Could not find 10-K document for {accession_number}")
+            if not doc_url:
+                logger.warning(f"Could not find primary 10-K document for {accession_number}")
                 continue
             
-            # Download the actual document
-            logger.info(f"  Downloading from: {doc_10k_url}")
-            response = self._make_request(doc_10k_url)
+            # Download the HTML document
+            logger.info(f"  Downloading from: {doc_url}")
+            response = self._make_request(doc_url)
+            
             if not response:
                 logger.warning(f"Failed to download 10-K for {accession_number}")
                 continue
             
-            # Check if we got the XBRL viewer instead of actual content
             content = response.text
-            if 'XBRL Viewer' in content and len(content) < 50000:
-                logger.warning(f"Got XBRL viewer page instead of document, trying alternative...")
-                
-                # Try to find the actual document in the primary-document field
-                soup_doc = BeautifulSoup(content, 'html.parser')
-                # Sometimes the actual doc is in the iframe src or a specific link
-                # Let's look for the "Complete submission text file" instead
-                
-                # Alternative: Download the complete submission text file (.txt)
-                txt_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_clean}/{accession_number}.txt"
-                logger.info(f"  Trying complete submission: {txt_url}")
-                response = self._make_request(txt_url)
-                
-                if not response:
-                    logger.warning(f"Failed to get alternative format")
-                    continue
-                
-                content = response.text
-                doc_10k_url = txt_url
+            
+            # Validate content
+            if len(content) < 5000:
+                logger.warning(f"  Content too small ({len(content)} bytes)")
+                continue
             
             # Save the file
             ticker_dir = self.output_dir / ticker
             ticker_dir.mkdir(parents=True, exist_ok=True)
             
-            # Determine file extension
-            ext = 'htm' if '.htm' in doc_10k_url else 'txt'
+            # Determine extension based on content
+            if content.strip().startswith('<?xml') or '<xbrl' in content.lower()[:1000]:
+                ext = 'xml'
+            else:
+                ext = 'htm'
+            
             filename = f"{ticker}_{accession_number.replace('-', '_')}_10k.{ext}"
             filepath = ticker_dir / filename
             
-            with open(filepath, 'w', encoding='utf-8') as f:
+            with open(filepath, 'w', encoding='utf-8', errors='ignore') as f:
                 f.write(content)
             
             filing['download_path'] = str(filepath)
             filing['file_size'] = len(content)
-            filing['download_url'] = doc_10k_url
+            filing['download_url'] = doc_url
             filing['downloaded_at'] = datetime.now().isoformat()
+            filing['primary_document'] = primary_doc_name
             
             downloaded_filings.append(filing)
-            logger.info(f"  Saved: {filepath} ({len(content)} bytes)")
+            logger.info(f"  Saved: {filepath} ({len(content):,} bytes)")
         
         logger.info(f"Downloaded {len(downloaded_filings)} files")
         return downloaded_filings
+
+    def phase_d_extraction(self, filings: List[Dict]) -> List[Dict]:
+        logger.info("PHASE D: TEXT EXTRACTION")
+        extracted_filings = []
+        
+        for idx, filing in enumerate(filings, 1):
+            download_path = filing.get('download_path')
+            if not download_path or not Path(download_path).exists():
+                logger.warning(f"File not found for extraction: {download_path}")
+                continue
+                
+            ticker = filing.get('ticker', 'UNKNOWN')
+            logger.info(f"Extracting text {idx}/{len(filings)}: {ticker}")
+            
+            try:
+                text_content = self.extract_text_from_10k(download_path)
+                
+                # Create new filename
+                original_path = Path(download_path)
+                clean_filename = original_path.stem + "_clean.txt"
+                clean_path = original_path.parent / clean_filename
+                
+                with open(clean_path, 'w', encoding='utf-8') as f:
+                    f.write(text_content)
+                
+                filing['clean_text_path'] = str(clean_path)
+                filing['clean_text_size'] = len(text_content)
+                extracted_filings.append(filing)
+                logger.info(f"  Saved clean text: {clean_path}")
+                
+            except Exception as e:
+                logger.error(f"Failed to extract text from {download_path}: {e}")
+                
+        logger.info(f"Extracted text for {len(extracted_filings)} filings")
+        return extracted_filings
 
 
     def save_metadata(self, filings: List[Dict], format: str = 'json'):
@@ -350,7 +419,7 @@ class SECFilingScraper:
             
             fieldnames = ['ticker', 'cik', 'company_name', 'form_type', 'date_filed', 
                          'accession_number', 'fiscal_year', 'filing_url', 'download_url',
-                         'download_path', 'file_size', 'downloaded_at']
+                         'download_path', 'clean_text_path', 'file_size', 'clean_text_size', 'downloaded_at']
             
             with open(metadata_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
@@ -371,11 +440,50 @@ class SECFilingScraper:
         downloaded_filings = self.phase_c_download(enriched_filings)
         if not downloaded_filings:
             return
+
+        extracted_filings = self.phase_d_extraction(downloaded_filings)
+        if not extracted_filings:
+            return
         
-        self.save_metadata(downloaded_filings, format=save_format)
-        logger.info(f"Complete! Processed {len(downloaded_filings)} filings")
+        self.save_metadata(extracted_filings, format=save_format)
+        logger.info(f"Complete! Processed {len(extracted_filings)} filings")
 
-
+    def extract_text_from_10k(self, filepath: str) -> str:
+        """
+        Helper method to extract clean text from downloaded 10-K files.
+        Handles both .txt (with <DOCUMENT> tags) and .htm formats.
+        
+        Args:
+            filepath: Path to the downloaded 10-K file
+            
+        Returns:
+            Extracted text content
+        """
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        # Check if it contains <TEXT> tags (standard SEC SGML wrapper)
+        # Often .txt files from EDGAR are SGML wrappers around HTML or plain text
+        text_match = re.search(r'<TEXT>(.*?)</TEXT>', content, re.DOTALL | re.IGNORECASE)
+        if text_match:
+            content = text_match.group(1)
+        
+        # Use BeautifulSoup to clean up HTML/XML tags
+        soup = BeautifulSoup(content, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(['script', 'style']):
+            script.decompose()
+        
+        # Get text
+        text = soup.get_text()
+        
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return text
 def main():
     scraper = SECFilingScraper()
     scraper.run(save_format='json')

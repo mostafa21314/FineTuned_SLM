@@ -3,8 +3,8 @@
 # =========================
 
 project:
-  name: "financial-filings-qa-llm"
-  description: "End-to-end pipeline for Q&A about financial filings of specific publicly listed companies (NVDA, AAPL, GOOGL, MSFT, AMZN, META, AVGO, TSLA, BRK-B, LLY, JPM, WMT, V, ORCL, XOM)"
+  name: "egx30-banks-qa-llm"
+  description: "End-to-end pipeline for Q&A about financial disclosures and reports of EGX30-listed banks (CIB, Credit Agricole Egypt, ADIB Egypt)"
   version: "0.1.0"
 
 # =========================
@@ -13,11 +13,13 @@ project:
 
 domain:
   topic_prompt: >
-    You are an expert financial analyst assistant specializing in SEC filings and corporate financial documents.
-    Answer questions about publicly listed companies' financial filings, including 10-K annual reports,
-    10-Q quarterly reports, 8-K current reports, proxy statements, financial statements, balance sheets,
-    income statements, cash flow statements, risk factors, management discussion and analysis (MD&A),
-    executive compensation, corporate governance, and regulatory disclosures.
+    You are an expert financial analyst assistant specializing in banking sector disclosures
+    and financial reports of Egyptian publicly listed banks.
+    Answer questions about EGX-listed banks' financial filings and disclosures, including
+    annual reports, quarterly financial statements, earnings releases, balance sheets,
+    income statements, cash flow statements, risk management disclosures, capital adequacy,
+    liquidity ratios, asset quality, management discussion and analysis (MD&A),
+    corporate governance, and regulatory compliance with the Central Bank of Egypt (CBE).
   use_case: "question_answering"
   language: "en"
 
@@ -28,11 +30,12 @@ domain:
 data_sources:
   web:
     enabled: true
-    # Web scraping for SEC EDGAR (will be filtered by tickers in sec_edgar section)
+    # Web scraping for EGX disclosures, investor relations pages, and regulatory filings
     seed_urls:
-      - "https://www.sec.gov/edgar/searchedgar/companysearch.html"
-      - "https://www.sec.gov/edgar/browse/?CIK=&owner=exclude&action=getcurrent"
-      - "https://www.sec.gov/edgar/filer-information/current-edgar-companies"
+      - "https://www.egx.com.eg"
+      - "https://www.cibeg.com"
+      - "https://www.ca-egypt.com"
+      - "https://www.adib.eg"
 
     max_pages: 1000
     crawl_depth: 3
@@ -46,37 +49,20 @@ data_sources:
       - ".txt"
       - ".htm"
       - ".html"
-  
-  sec_edgar:
+
+  egx:
     enabled: true
-    api_base_url: "https://data.sec.gov/api/xbrl"
     filing_types:
-      - "10-K"
-      - "10-Q"
-      - "8-K"
-      - "DEF 14A"
-      - "S-1"
-      - "S-3"
-    # Target specific tickers (will be mapped to CIKs automatically)
+      - "Annual Report"
+      - "Quarterly Financial Statements"
+      - "Earnings Release"
+      - "Board of Directors Report"
+      - "Corporate Governance Report"
+    # Target specific EGX30-listed banks
     tickers:
-      - "NVDA"   # NVIDIA Corporation
-      - "AAPL"   # Apple Inc.
-      - "GOOGL"  # Alphabet Inc. (Class A)
-      - "MSFT"   # Microsoft Corporation
-      - "AMZN"   # Amazon.com Inc.
-      - "META"   # Meta Platforms Inc.
-      - "AVGO"   # Broadcom Inc.
-      - "TSLA"   # Tesla Inc.
-      - "BRK-B"  # Berkshire Hathaway Inc. (Class B)
-      - "LLY"    # Eli Lilly and Company
-      - "JPM"    # JPMorgan Chase & Co.
-      - "WMT"    # Walmart Inc.
-      - "V"      # Visa Inc.
-      - "ORCL"   # Oracle Corporation
-      - "XOM"    # Exxon Mobil Corporation
-    # CIKs will be automatically resolved from tickers
-    # If you prefer to use CIKs directly, uncomment and specify below:
-    # companies: []
+      - "CIB"    # Commercial International Bank Egypt
+      - "CAE"    # Credit Agricole Egypt
+      - "ADIB"   # Abu Dhabi Islamic Bank Egypt
 
 # =========================
 # Data Processing
