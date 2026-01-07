@@ -1,0 +1,176 @@
+# =========================
+# Project Configuration
+# =========================
+
+project:
+  name: "financial-filings-qa-llm"
+  description: "End-to-end pipeline for Q&A about financial filings of specific publicly listed companies (NVDA, AAPL, GOOGL, MSFT, AMZN, META, AVGO, TSLA, BRK-B, LLY, JPM, WMT, V, ORCL, XOM)"
+  version: "0.1.0"
+
+# =========================
+# Domain & Use Case
+# =========================
+
+domain:
+  topic_prompt: >
+    You are an expert financial analyst assistant specializing in SEC filings and corporate financial documents.
+    Answer questions about publicly listed companies' financial filings, including 10-K annual reports,
+    10-Q quarterly reports, 8-K current reports, proxy statements, financial statements, balance sheets,
+    income statements, cash flow statements, risk factors, management discussion and analysis (MD&A),
+    executive compensation, corporate governance, and regulatory disclosures.
+  use_case: "question_answering"
+  language: "en"
+
+# =========================
+# Data Sources
+# =========================
+
+data_sources:
+  web:
+    enabled: true
+    # Web scraping for SEC EDGAR (will be filtered by tickers in sec_edgar section)
+    seed_urls:
+      - "https://www.sec.gov/edgar/searchedgar/companysearch.html"
+      - "https://www.sec.gov/edgar/browse/?CIK=&owner=exclude&action=getcurrent"
+      - "https://www.sec.gov/edgar/filer-information/current-edgar-companies"
+
+    max_pages: 1000
+    crawl_depth: 3
+
+  pdf:
+    enabled: true
+    directories:
+      - "data/raw/pdfs"
+    allowed_extensions:
+      - ".pdf"
+      - ".txt"
+      - ".htm"
+      - ".html"
+  
+  sec_edgar:
+    enabled: true
+    api_base_url: "https://data.sec.gov/api/xbrl"
+    filing_types:
+      - "10-K"
+      - "10-Q"
+      - "8-K"
+      - "DEF 14A"
+      - "S-1"
+      - "S-3"
+    # Target specific tickers (will be mapped to CIKs automatically)
+    tickers:
+      - "NVDA"   # NVIDIA Corporation
+      - "AAPL"   # Apple Inc.
+      - "GOOGL"  # Alphabet Inc. (Class A)
+      - "MSFT"   # Microsoft Corporation
+      - "AMZN"   # Amazon.com Inc.
+      - "META"   # Meta Platforms Inc.
+      - "AVGO"   # Broadcom Inc.
+      - "TSLA"   # Tesla Inc.
+      - "BRK-B"  # Berkshire Hathaway Inc. (Class B)
+      - "LLY"    # Eli Lilly and Company
+      - "JPM"    # JPMorgan Chase & Co.
+      - "WMT"    # Walmart Inc.
+      - "V"      # Visa Inc.
+      - "ORCL"   # Oracle Corporation
+      - "XOM"    # Exxon Mobil Corporation
+    # CIKs will be automatically resolved from tickers
+    # If you prefer to use CIKs directly, uncomment and specify below:
+    # companies: []
+
+# =========================
+# Data Processing
+# =========================
+
+data_processing:
+  cleaning:
+    min_text_length: 200
+    remove_duplicates: true
+    language_filter: "en"
+
+  chunking:
+    max_tokens: 512
+    overlap_tokens: 64
+
+  storage:
+    format: "jsonl"
+    path: "data/processed"
+
+# =========================
+# Dataset Generation
+# =========================
+
+dataset:
+  qa_generation:
+    questions_per_chunk: 3
+    max_answer_tokens: 256
+
+  augmentation:
+    enabled: true
+    llm_provider: "openai"   # or "anthropic", "local"
+    temperature: 0.7
+
+  splits:
+    train: 0.8
+    validation: 0.1
+    test: 0.1
+
+# =========================
+# Model & Fine-tuning
+# =========================
+
+model:
+  base_model: "meta-llama/Meta-Llama-3-7B"
+  max_sequence_length: 2048
+
+fine_tuning:
+  method: "qlora"           # lora | qlora
+  output_dir: "models/fine_tuned"
+  num_epochs: 3
+  batch_size: 2
+  learning_rate: 2e-4
+  gradient_accumulation_steps: 8
+  fp16: true
+
+# =========================
+# Evaluation & Benchmarking
+# =========================
+
+evaluation:
+  metrics:
+    - "bleu"
+    - "rouge"
+  benchmark:
+    questions: 100
+    auto_generate: true
+
+# =========================
+# Deployment
+# =========================
+
+deployment:
+  api:
+    host: "0.0.0.0"
+    port: 8000
+    auth_enabled: true
+
+  inference:
+    max_new_tokens: 256
+    temperature: 0.2
+
+# =========================
+# Orchestration
+# =========================
+
+orchestration:
+  scheduler:
+    enabled: true
+    retrain_cron: "0 2 * * 0"  # weekly retraining
+
+# =========================
+# Logging & Monitoring
+# =========================
+
+logging:
+  level: "INFO"
+  log_dir: "logs"

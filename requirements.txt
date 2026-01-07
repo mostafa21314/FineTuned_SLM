@@ -1,0 +1,58 @@
+# =========================
+# Core
+# =========================
+python-dotenv
+pyyaml
+tqdm
+loguru
+
+# =========================
+# Data Collection
+# =========================
+requests
+beautifulsoup4
+playwright
+pdfplumber
+pymupdf
+
+# =========================
+# Data Processing
+# =========================
+pandas
+numpy
+scikit-learn
+langdetect
+
+# # =========================
+# # LLM & Fine-tuning
+# # =========================
+# torch
+# transformers
+# datasets
+# peft
+# accelerate
+# bitsandbytes
+
+# # =========================
+# # Evaluation
+# # =========================
+# nltk
+# rouge-score
+# evaluate
+
+# # =========================
+# # Serving
+# # =========================
+# fastapi
+# uvicorn
+# pydantic
+
+# # =========================
+# # Experiment Tracking & MLOps
+# # =========================
+# mlflow
+
+# # =========================
+# # Orchestration (optional)
+# # =========================
+# apache-airflow
