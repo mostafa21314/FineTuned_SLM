@@ -1,4 +1,3 @@
 .env
 cars_LLM/
 data/raw/sec_filings/
-data/raw/pdfs/

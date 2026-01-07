@@ -23,12 +23,11 @@ class PDFProcessor:
 
     def parse_filename_metadata(self, filename: str) -> Dict:
         """
-        Extracts metadata from standardized filename:
-        Format: {Bank}_{Year}_{Quarter}_{Type}.pdf
-        Example: CIB_2024_Q3_Consolidated.pdf
+        Extracts metadata from filename.
+        Handles strict format: {Bank}_{Year}_{Quarter}_{Type}.pdf
+        And CIB format: CIB Consolidated financial statements [Month] [Year] English.pdf
         """
         stem = Path(filename).stem
-        parts = stem.split('_')
         
         metadata = {
             "source_filename": filename,
@@ -39,17 +38,52 @@ class PDFProcessor:
             "processed_at": datetime.now().isoformat()
         }
         
-        if len(parts) >= 4:
+        # 1. Try standardized format (Underscore separated)
+        parts = stem.split('_')
+        if len(parts) >= 3 and parts[1].isdigit() and len(parts[1]) == 4:
             metadata["bank"] = parts[0]
-            metadata["year"] = int(parts[1]) if parts[1].isdigit() else parts[1]
+            metadata["year"] = int(parts[1])
             metadata["quarter"] = parts[2]
-            metadata["type"] = parts[3]
-        elif len(parts) >= 2:
-            metadata["bank"] = parts[0]
-            for p in parts:
-                if p.isdigit() and len(p) == 4:
-                    metadata["year"] = int(p)
-                    
+            if len(parts) > 3:
+                metadata["type"] = parts[3]
+            return metadata
+
+        # 2. Try CIB/Verbose format
+        # Example: 'CIB Consolidated financial statements December 2024 English'
+        # Example: 'CIB Consolidation financial statements September 2024 English'
+        
+        # Extract Bank (Start of string)
+        if stem.upper().startswith("CIB"):
+            metadata["bank"] = "CIB"
+        elif stem.upper().startswith("ADIB"):
+            metadata["bank"] = "ADIB"
+        elif stem.upper().startswith("CAE"):
+            metadata["bank"] = "CAE"
+            
+        # Extract Year (4 digits)
+        year_match = re.search(r'\b202[0-9]\b', stem)
+        if year_match:
+            metadata["year"] = int(year_match.group(0))
+            
+        # Extract Quarter/Month
+        stem_lower = stem.lower()
+        if "march" in stem_lower or "q1" in stem_lower:
+            metadata["quarter"] = "Q1"
+        elif "june" in stem_lower or "q2" in stem_lower:
+            metadata["quarter"] = "Q2"
+        elif "september" in stem_lower or "q3" in stem_lower:
+            metadata["quarter"] = "Q3"
+        elif "december" in stem_lower or "q4" in stem_lower:
+            metadata["quarter"] = "Q4"
+        else:
+            metadata["quarter"] = "Annual"
+            
+        # Extract Type
+        if "consolidated" in stem_lower or "consolidation" in stem_lower:
+            metadata["type"] = "Consolidated"
+        elif "separate" in stem_lower or "standalone" in stem_lower:
+            metadata["type"] = "Separate"
+            
         return metadata
 
     def table_to_markdown(self, table: List[List]) -> str:
