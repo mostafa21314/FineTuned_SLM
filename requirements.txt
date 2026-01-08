@@ -22,6 +22,7 @@ pandas
 numpy
 scikit-learn
 langdetect
+google-generativeai
 
 # # =========================
 # # LLM & Fine-tuning
