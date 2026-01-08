@@ -27,12 +27,14 @@ google-generativeai
 # # =========================
 # # LLM & Fine-tuning
 # # =========================
-# torch
-# transformers
-# datasets
-# peft
-# accelerate
-# bitsandbytes
+torch
+transformers
+datasets
+peft
+accelerate
+bitsandbytes
+wandb
+trl
 
 # # =========================
 # # Evaluation
