@@ -115,7 +115,7 @@ def main():
     )
 
     # 6. Training Arguments
-    training_args = SFTConfig(
+    training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -132,11 +132,6 @@ def main():
         group_by_length=True,
         lr_scheduler_type="cosine",
         report_to="wandb" if args.use_wandb else "none",
-        max_seq_length=args.max_seq_length,
-        dataset_text_field="messages", # Not used directly if passing formatted messages? checks TRL docs.. SFTTrainer handles 'messages' column automatically if dataset contains it and no packing/formatting_func is passed?
-        # Actually SFTTrainer with dataset_kwargs needs 'messages' usually.
-        # Let's verify: newer TRL SFTTrainer handles chat templates if we pass 'messages' column.
-        packing=False, # We usually want packing false for chat instruction unless strictly using it
     )
     
     if args.max_steps > 0:
@@ -151,6 +146,9 @@ def main():
         peft_config=peft_config,
         tokenizer=tokenizer,
         args=training_args,
+        max_seq_length=args.max_seq_length,
+        dataset_text_field="messages",
+        packing=False,
     )
 
     # 8. Train
