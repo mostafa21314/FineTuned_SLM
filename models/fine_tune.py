@@ -57,7 +57,7 @@ def load_and_prepare_data(input_file, test_size=0.1, val_size=0.1):
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune Gemma 2 on QnA dataset using LoRA.")
     parser.add_argument("--input", default="data/processed/qna_dataset.jsonl", help="Path to input JSONL dataset")
-    parser.add_argument("--model_name", default="google/gemma-2-2b-it", help="Base model name")
+    parser.add_argument("--model_name", default="google/gemma-3-270m-it", help="Base model name")
     parser.add_argument("--output_dir", default="models/fine_tuned", help="Output directory for adapters")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size per device")
@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--max_seq_length", type=int, default=1024, help="Max sequence length")
     parser.add_argument("--use_wandb", action="store_true", default=True, help="Use Weights & Biases for logging")
     parser.add_argument("--max_steps", type=int, default=-1, help="If > 0, override epochs and train for max_steps")
+    parser.add_argument("--disable_quantization", action="store_true", help="Disable 4-bit quantization (recommended for small models)")
 
     args = parser.parse_args()
 
@@ -77,12 +78,14 @@ def main():
     dataset = load_and_prepare_data(args.input)
 
     # 2. Quantization Config
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
-        bnb_4bit_use_double_quant=True,
-    )
+    bnb_config = None
+    if not args.disable_quantization:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
 
     # 3. Load Base Model
     print(f"Loading model {args.model_name}...")
@@ -90,10 +93,12 @@ def main():
         args.model_name,
         quantization_config=bnb_config,
         device_map="auto",
-        trust_remote_code=True
+        trust_remote_code=True,
+        torch_dtype=torch.float16 if args.disable_quantization else None
     )
     model.config.use_cache = False # Required for gradient checkpointing
-    model = prepare_model_for_kbit_training(model)
+    if bnb_config:
+        model = prepare_model_for_kbit_training(model)
 
     # 4. Load Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
