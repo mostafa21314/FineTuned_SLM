@@ -9,6 +9,7 @@ import evaluate
 import wandb
 from tqdm import tqdm
 from fine_tune import load_and_prepare_data
+import time
 
 def load_chunks(chunks_file):
     """Loads text chunks into a dictionary keyed by chunk_id."""
@@ -89,8 +90,9 @@ def evaluate_model(args):
             max_length=2048
         ).to(base_model.device)
 
+        max_new_tokens = 256
         gen_kwargs = {
-            "max_new_tokens": 256,
+            "max_new_tokens": max_new_tokens,
             "do_sample": False,
             "temperature": 0.7,
             "top_p": 0.9,
@@ -101,25 +103,35 @@ def evaluate_model(args):
         with torch.no_grad():
             # Base Model
             with ft_model.disable_adapter():
+                start_time = time.time()
                 base_out = ft_model.generate(**inputs, **gen_kwargs)
+                base_time = time.time() - start_time
             
             # Fine-tuned Model
+            start_time = time.time()
             ft_out = ft_model.generate(**inputs, **gen_kwargs)
+            ft_time = time.time() - start_time
             
-        # Decode Output Batch
-        # We need to slice off the prompt tokens. 
-        # Since padding causes prompt lengths to vary, simple slicing [:, input_len:] works if left-padded correctly?
-        # Actually generate returns full sequence. Left padding is standard for generation.
-        # But we must be careful with slicing.
-        
-        base_preds_decoded = tokenizer.batch_decode(base_out, skip_special_tokens=True)
-        ft_preds_decoded = tokenizer.batch_decode(ft_out, skip_special_tokens=True)
-        
-        # We need to remove the prompt from the decoded string.
-        # Since we have the input `augmented_content` and tokenizer decoding might introduce spaces/artifacts, 
-        # robust way is to slice tokens or string match.
-        # Simple token slicing:
+        # ... (decoding) ...
         input_len = inputs.input_ids.shape[1]
+        
+        # Calculate tokens generated per batch
+        base_tokens_generated = base_out.shape[1] - input_len
+        ft_tokens_generated = ft_out.shape[1] - input_len
+        
+        # Avoid zero division
+        base_tokens_generated = max(1, base_tokens_generated)
+        ft_tokens_generated = max(1, ft_tokens_generated)
+
+        # Throughput (tokens/sec) - Average for the batch
+        # Note: This is "batch throughput". Per-sample latency is rougher to estimate without per-beam timestamps.
+        base_throughput = (base_tokens_generated * inputs.input_ids.shape[0]) / base_time
+        ft_throughput = (ft_tokens_generated * inputs.input_ids.shape[0]) / ft_time
+        
+        # Latency (ms/token)
+        base_latency = (base_time * 1000) / (base_tokens_generated * inputs.input_ids.shape[0])
+        ft_latency = (ft_time * 1000) / (ft_tokens_generated * inputs.input_ids.shape[0])
+
         base_preds = tokenizer.batch_decode(base_out[:, input_len:], skip_special_tokens=True)
         ft_preds = tokenizer.batch_decode(ft_out[:, input_len:], skip_special_tokens=True)
 
@@ -129,17 +141,13 @@ def evaluate_model(args):
                 "context": chunks_lookup.get(cid, "")[:200] + "...",
                 "ground_truth": gt,
                 "base_prediction": base.strip() if base.strip() else ".",
-                "finetuned_prediction": ft.strip() if ft.strip() else "."
+                "finetuned_prediction": ft.strip() if ft.strip() else ".",
+                "base_latency": base_latency,
+                "ft_latency": ft_latency,
+                "base_throughput": base_throughput,
+                "ft_throughput": ft_throughput
             })
-            
-    # Debug: Print first few examples
-    if len(results) >= 1:
-        print(f"\n--- Example 1 ---")
-        print(f"Question: {results[0]['question']}")
-        print(f"Ground Truth: {results[0]['ground_truth']}")
-        print(f"Base: {results[0]['base_prediction']}")
-        print(f"Fine-tuned: {results[0]['finetuned_prediction']}")
-
+    
     # 5. Compute Metrics
     predictions_base = [r["base_prediction"] if r["base_prediction"].strip() else "." for r in results]
     predictions_ft = [r["finetuned_prediction"] if r["finetuned_prediction"].strip() else "." for r in results]
@@ -152,15 +160,22 @@ def evaluate_model(args):
     # BLEU
     bleu_base = bleu.compute(predictions=predictions_base, references=references)
     bleu_ft = bleu.compute(predictions=predictions_ft, references=references)
+    
+    # Speed Metrics Average
+    avg_base_latency = sum(r['base_latency'] for r in results) / len(results)
+    avg_ft_latency = sum(r['ft_latency'] for r in results) / len(results)
+    avg_base_throughput = sum(r['base_throughput'] for r in results) / len(results)
+    avg_ft_throughput = sum(r['ft_throughput'] for r in results) / len(results)
 
-    # 6. Output & Logging
     print("\n" + "="*50)
-    print(f"{'Metric':<15} | {'Base Model':<15} | {'Fine-tuned':<15}")
-    print("-" * 50)
-    print(f"{'ROUGE-1':<15} | {rouge_base['rouge1']:.4f}          | {rouge_ft['rouge1']:.4f}")
-    print(f"{'ROUGE-2':<15} | {rouge_base['rouge2']:.4f}          | {rouge_ft['rouge2']:.4f}")
-    print(f"{'ROUGE-L':<15} | {rouge_base['rougeL']:.4f}          | {rouge_ft['rougeL']:.4f}")
-    print(f"{'BLEU':<15}    | {bleu_base['bleu']:.4f}            | {bleu_ft['bleu']:.4f}")
+    print(f"{'Metric':<20} | {'Base Model':<15} | {'Fine-tuned':<15}")
+    print("-" * 55)
+    print(f"{'ROUGE-1':<20} | {rouge_base['rouge1']:.4f}          | {rouge_ft['rouge1']:.4f}")
+    print(f"{'ROUGE-2':<20} | {rouge_base['rouge2']:.4f}          | {rouge_ft['rouge2']:.4f}")
+    print(f"{'ROUGE-L':<20} | {rouge_base['rougeL']:.4f}          | {rouge_ft['rougeL']:.4f}")
+    print(f"{'BLEU':<20}    | {bleu_base['bleu']:.4f}            | {bleu_ft['bleu']:.4f}")
+    print(f"{'Latency (ms/tok)':<20} | {avg_base_latency:.2f}             | {avg_ft_latency:.2f}")
+    print(f"{'Throughput (tok/s)':<20}| {avg_base_throughput:.2f}             | {avg_ft_throughput:.2f}")
     print("="*50 + "\n")
 
     # Create Table for Comparison (First 10 examples)
@@ -176,6 +191,10 @@ def evaluate_model(args):
         "ft_rougeL": rouge_ft['rougeL'],
         "base_bleu": bleu_base['bleu'],
         "ft_bleu": bleu_ft['bleu'],
+        "base_latency_ms": avg_base_latency,
+        "ft_latency_ms": avg_ft_latency,
+        "base_throughput_tok_s": avg_base_throughput,
+        "ft_throughput_tok_s": avg_ft_throughput,
         "comparison_table": wandb.Table(dataframe=df_results)
     })
     
