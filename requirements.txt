@@ -39,9 +39,9 @@ trl
 # # =========================
 # # Evaluation
 # # =========================
-# nltk
-# rouge-score
-# evaluate
+nltk
+rouge-score
+evaluate
 
 # # =========================
 # # Serving
